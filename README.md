@@ -1,4 +1,4 @@
-# CUDA TCP Project Demo 
+# CUDA TCP Project Demo (for Windows) 
 
 Simulate CUDA cpp code that receives data for for processing in GPU 
 TCP / IP as major protocol 
@@ -10,3 +10,5 @@ Instead here, is just simulating TCP/IP so we build it in 1 .cpp file using thre
 ## Requirements
 
 CUDA Toolkit
+
+Windows
