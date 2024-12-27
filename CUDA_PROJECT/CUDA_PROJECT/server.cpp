@@ -3,6 +3,8 @@
 #include <winsock2.h>
 #include <ws2tcpip.h>
 #include <string>
+#include <vector>
+#include <sstream>
 #include <cuda_runtime.h>
 #include <device_launch_parameters.h>
 #pragma comment(lib, "ws2_32.lib")
@@ -19,7 +21,6 @@ void startServer() {
     int opt = 1;
     int addrlen = sizeof(address);
     char buffer[1024] = { 0 };
-    const char* hello = "Hello from server";
 
     if (WSAStartup(MAKEWORD(2, 2), &wsaData) != 0) {
         std::cerr << "WSAStartup failed\n";
@@ -70,27 +71,43 @@ void startServer() {
     }
     std::cout << "Connection accepted\n";
 
-    recv(new_socket, buffer, static_cast<int>(sizeof(buffer)), 0);
-    std::cout << "Server received: " << buffer << std::endl;
+    // Main loop for handling commands
+    while (true) {
+        recv(new_socket, buffer, static_cast<int>(sizeof(buffer)), 0);
+        std::string command(buffer);
 
-    // CUDA operation
-    const int arraySize = 5;
-    const int a[arraySize] = { 1, 2, 3, 4, 5 };
-    const int b[arraySize] = { 10, 20, 30, 40, 50 };
-    int c[arraySize] = { 0 };
+        if (command == "exit") {
+            std::cout << "Exiting...\n";
+            send(new_socket, "Server exiting...", 18, 0);
+            break;
+        }
+        else if (command == "add") {
+            // CUDA operation
+            const int arraySize = 5;
+            const int a[arraySize] = { 1, 2, 3, 4, 5 };
+            const int b[arraySize] = { 10, 20, 30, 40, 50 };
+            int c[arraySize] = { 0 };
 
-    std::cout << "Performing CUDA operation\n";
-    cudaError_t cudaStatus = addWithCuda(c, a, b, arraySize);
-    if (cudaStatus != cudaSuccess) {
-        fprintf(stderr, "addWithCuda failed!");
+            std::cout << "Performing CUDA operation\n";
+            cudaError_t cudaStatus = addWithCuda(c, a, b, arraySize);
+            if (cudaStatus != cudaSuccess) {
+                fprintf(stderr, "addWithCuda failed!");
+                send(new_socket, "CUDA operation failed", 21, 0);
+            }
+            else {
+                std::cout << "CUDA operation succeeded\n";
+                std::string result = "Result: {" + std::to_string(c[0]) + "," + std::to_string(c[1]) + "," 
+                    + std::to_string(c[2]) + "," + std::to_string(c[3]) + "," + std::to_string(c[4]) + "}";
+                send(new_socket, result.c_str(), static_cast<int>(result.size()), 0);
+                std::cout << "Result sent to client: " << result << std::endl;
+            }
+        }
+        else {
+            std::string errorMsg = "Unknown command: " + command;
+            send(new_socket, errorMsg.c_str(), static_cast<int>(errorMsg.size()), 0);
+            std::cout << errorMsg << std::endl;
+        }
     }
-    else {
-        std::cout << "CUDA operation succeeded\n";
-    }
-
-    std::string result = "Result: {" + std::to_string(c[0]) + "," + std::to_string(c[1]) + "," + std::to_string(c[2]) + "," + std::to_string(c[3]) + "," + std::to_string(c[4]) + "}";
-    send(new_socket, result.c_str(), static_cast<int>(result.size()), 0);
-    std::cout << "Result sent to client: " << result << std::endl;
 
     closesocket(new_socket);
     closesocket(server_fd);
@@ -101,7 +118,6 @@ void startClient() {
     WSADATA wsaData;
     SOCKET sock = INVALID_SOCKET;
     struct sockaddr_in serv_addr;
-    const char* message = "Hello from client";
     char buffer[1024] = { 0 };
 
     if (WSAStartup(MAKEWORD(2, 2), &wsaData) != 0) {
@@ -138,18 +154,25 @@ void startClient() {
     }
     std::cout << "Connected to server\n";
 
-    send(sock, message, static_cast<int>(strlen(message)), 0);
-    std::cout << "Hello message sent from client\n";
-    recv(sock, buffer, static_cast<int>(sizeof(buffer)), 0);
-    std::cout << "Message from server: " << buffer << std::endl;
+    std::string input;
+    while (true) {
+        std::cout << "Enter command (add, exit): ";
+        std::getline(std::cin, input);
+
+        send(sock, input.c_str(), static_cast<int>(input.size()), 0);
+        if (input == "exit") {
+            break;
+        }
+
+        recv(sock, buffer, static_cast<int>(sizeof(buffer)), 0);
+        std::cout << "Response from server: " << buffer << std::endl;
+    }
 
     closesocket(sock);
     WSACleanup();
 }
 
-// MAIN FUNCTION
 int main() {
-	// We are using multiple threads to simulate TCP/IP server client communication
     std::thread serverThread(startServer);
     std::thread clientThread(startClient);
 
