@@ -1,0 +1,52 @@
+# Ignore build and binary directories
+/build/
+/bin/
+/obj/
+/out/
+
+# Ignore compiled object files
+*.o
+*.obj
+*.lo
+*.a
+*.lib
+
+# Ignore CUDA-specific files
+*.ptx
+*.cubin
+*.fatbin
+
+# Ignore precompiled headers (if applicable)
+*.gch
+*.pch
+
+# Ignore the CMake build directory (if using CMake)
+CMakeFiles/
+CMakeCache.txt
+Makefile
+cmake_install.cmake
+CMakeLists.txt.user
+
+# Ignore IDE and editor configuration files
+# Visual Studio
+.vs/
+.vscode/
+.idea/
+
+# Ignore macOS system files
+.DS_Store
+
+# Ignore Windows system files
+Thumbs.db
+
+# Ignore log files
+*.log
+
+# Ignore temporary files (editor backups, etc.)
+*~
+*.swp
+*.swo
+
+# Ignore the executables
+*.exe
+*.out
