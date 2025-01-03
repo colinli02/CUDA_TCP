@@ -13,8 +13,10 @@
 #define BACKLOG 10
 
 extern "C" cudaError_t addWithCuda(int* c, const int* a, const int* b, unsigned int size);
+extern "C" cudaError_t matmulWithCuda(int* C, const int* A, const int* B, unsigned int N);
 
-void startServer() {
+void startServer() 
+{
     WSADATA wsaData;
     SOCKET server_fd, new_socket;
     struct sockaddr_in address;
@@ -82,13 +84,12 @@ void startServer() {
             break;
         }
         else if (command == "add") {
-            // CUDA operation
             const int arraySize = 5;
             const int a[arraySize] = { 1, 2, 3, 4, 5 };
             const int b[arraySize] = { 10, 20, 30, 40, 50 };
             int c[arraySize] = { 0 };
 
-            std::cout << "Performing CUDA operation\n";
+            std::cout << "Performing CUDA add operation\n";
             cudaError_t cudaStatus = addWithCuda(c, a, b, arraySize);
             if (cudaStatus != cudaSuccess) {
                 fprintf(stderr, "addWithCuda failed!");
@@ -96,10 +97,44 @@ void startServer() {
             }
             else {
                 std::cout << "CUDA operation succeeded\n";
-                std::string result = "Result: {" + std::to_string(c[0]) + "," + std::to_string(c[1]) + "," 
+                std::string result = "Result: {" + std::to_string(c[0]) + "," + std::to_string(c[1]) + ","
                     + std::to_string(c[2]) + "," + std::to_string(c[3]) + "," + std::to_string(c[4]) + "}";
                 send(new_socket, result.c_str(), static_cast<int>(result.size()), 0);
                 std::cout << "Result sent to client: " << result << std::endl;
+            }
+        }
+        else if (command == "matmul") {
+            // Perform Matrix Multiplication
+            const int N = 3;  // 3x3 matrix
+            int A[N][N] = {
+                {1, 2, 3},
+                {4, 5, 6},
+                {7, 8, 9}
+            };
+            int B[N][N] = {
+                {9, 8, 7},
+                {6, 5, 4},
+                {3, 2, 1}
+            };
+            int C[N][N] = { 0 };
+
+            std::cout << "Performing CUDA matrix multiplication\n";
+            cudaError_t cudaStatus = matmulWithCuda((int*)C, (int*)A, (int*)B, N);
+            if (cudaStatus != cudaSuccess) {
+                std::cerr << "matmulWithCuda failed!" << std::endl;
+                send(new_socket, "CUDA matrix multiplication failed", 33, 0);
+            }
+            else {
+                std::cout << "Matrix multiplication succeeded" << std::endl;
+                std::ostringstream result;
+                result << "Result: ";
+                for (int i = 0; i < N; ++i) {
+                    for (int j = 0; j < N; ++j) {
+                        result << C[i][j] << " ";
+                    }
+                }
+                send(new_socket, result.str().c_str(), static_cast<int>(result.str().size()), 0);
+                std::cout << "Result sent to client: " << result.str() << std::endl;
             }
         }
         else {
@@ -156,7 +191,7 @@ void startClient() {
 
     std::string input;
     while (true) {
-        std::cout << "Enter command (add, exit): ";
+        std::cout << "Enter command (add, exit, matmul): ";
         std::getline(std::cin, input);
 
         send(sock, input.c_str(), static_cast<int>(input.size()), 0);
@@ -173,6 +208,7 @@ void startClient() {
 }
 
 int main() {
+	// Start TCP/IP server and client
     std::thread serverThread(startServer);
     std::thread clientThread(startClient);
 

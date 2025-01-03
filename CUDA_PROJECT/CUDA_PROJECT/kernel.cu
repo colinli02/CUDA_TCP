@@ -2,14 +2,17 @@
 #include "device_launch_parameters.h"
 #include <stdio.h>
 
+// CUDA Add
 extern "C" cudaError_t addWithCuda(int* c, const int* a, const int* b, unsigned int size);
 
-__global__ void addKernel(int* c, const int* a, const int* b) {
+__global__ void addKernel(int* c, const int* a, const int* b) 
+{
     int i = threadIdx.x;
     c[i] = a[i] + b[i];
 }
 
-extern "C" cudaError_t addWithCuda(int* c, const int* a, const int* b, unsigned int size) {
+extern "C" cudaError_t addWithCuda(int* c, const int* a, const int* b, unsigned int size) 
+{
     int* dev_a = 0;
     int* dev_b = 0;
     int* dev_c = 0;
@@ -85,4 +88,62 @@ Error:
     cudaFree(dev_b);
 
     return cudaStatus;
+}
+
+// Cuda Multiply
+__global__ void matmul_kernel(int* A, int* B, int* C, int N) {
+    int row = blockIdx.y * blockDim.y + threadIdx.y;
+    int col = blockIdx.x * blockDim.x + threadIdx.x;
+
+    if (row < N && col < N) {
+        int value = 0;
+        for (int k = 0; k < N; ++k) {
+            value += A[row * N + k] * B[k * N + col];
+        }
+        C[row * N + col] = value;
+    }
+}
+
+// Function to call the CUDA kernel for matrix multiplication
+extern "C" cudaError_t matmulWithCuda(int* C, const int* A, const int* B, unsigned int N) {
+    int* d_A = nullptr, * d_B = nullptr, * d_C = nullptr;
+    size_t size = N * N * sizeof(int);
+
+    // Allocate memory on device
+    cudaError_t err = cudaMalloc((void**)&d_A, size);
+    if (err != cudaSuccess) return err;
+
+    err = cudaMalloc((void**)&d_B, size);
+    if (err != cudaSuccess) return err;
+
+    err = cudaMalloc((void**)&d_C, size);
+    if (err != cudaSuccess) return err;
+
+    // Copy data from host to device
+    err = cudaMemcpy(d_A, A, size, cudaMemcpyHostToDevice);
+    if (err != cudaSuccess) return err;
+
+    err = cudaMemcpy(d_B, B, size, cudaMemcpyHostToDevice);
+    if (err != cudaSuccess) return err;
+
+    // Launch the kernel
+    dim3 threadsPerBlock(16, 16);
+    dim3 numBlocks((N + 15) / 16, (N + 15) / 16); // Divide N by block size
+
+    matmul_kernel<<<numBlocks, threadsPerBlock >>>(d_A, d_B, d_C, N);
+
+    // Check for kernel launch errors
+    err = cudaGetLastError();
+    if (err != cudaSuccess) return err;
+
+    // Copy the result from device to host
+    err = cudaMemcpy(C, d_C, size, cudaMemcpyDeviceToHost);
+    if (err != cudaSuccess) return err;
+
+    // Free device memory
+    cudaFree(d_A);
+    cudaFree(d_B);
+    cudaFree(d_C);
+
+    return cudaSuccess;
 }
