@@ -3,10 +3,12 @@
 #include <winsock2.h>
 #include <ws2tcpip.h>
 #include <string>
-#include <vector>
 #include <sstream>
+#include <atomic>
+
 #include <cuda_runtime.h>
 #include <device_launch_parameters.h>
+
 #pragma comment(lib, "ws2_32.lib")
 
 #define PORT 8080
@@ -15,97 +17,46 @@
 extern "C" cudaError_t addWithCuda(int* c, const int* a, const int* b, unsigned int size);
 extern "C" cudaError_t matmulWithCuda(int* C, const int* A, const int* B, unsigned int N);
 
-void startServer() 
-{
-    WSADATA wsaData;
-    SOCKET server_fd, new_socket;
-    struct sockaddr_in address;
-    int opt = 1;
-    int addrlen = sizeof(address);
+// Atomic counter for the number of active connections
+std::atomic<int> activeConnections(0);
+
+// Function to handle each client request
+void handleClient(SOCKET clientSocket) {
     char buffer[1024] = { 0 };
+    std::string command;
 
-    if (WSAStartup(MAKEWORD(2, 2), &wsaData) != 0) {
-        std::cerr << "WSAStartup failed\n";
-        return;
-    }
-    std::cout << "WSAStartup succeeded\n";
+    activeConnections++; // Increment active connections count when a client connects
+    std::cout << "New connection established. Active connections: " << activeConnections.load() << std::endl;
 
-    if ((server_fd = socket(AF_INET, SOCK_STREAM, 0)) == INVALID_SOCKET) {
-        std::cerr << "Socket creation failed\n";
-        WSACleanup();
-        return;
-    }
-    std::cout << "Socket created\n";
-
-    if (setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, (char*)&opt, sizeof(opt)) < 0) {
-        std::cerr << "Setsockopt failed\n";
-        closesocket(server_fd);
-        WSACleanup();
-        return;
-    }
-    std::cout << "Setsockopt succeeded\n";
-
-    address.sin_family = AF_INET;
-    address.sin_addr.s_addr = INADDR_ANY;
-    address.sin_port = htons(PORT);
-
-    if (bind(server_fd, (struct sockaddr*)&address, sizeof(address)) < 0) {
-        std::cerr << "Bind failed\n";
-        closesocket(server_fd);
-        WSACleanup();
-        return;
-    }
-    std::cout << "Bind succeeded\n";
-
-    if (listen(server_fd, BACKLOG) < 0) {
-        std::cerr << "Listen failed\n";
-        closesocket(server_fd);
-        WSACleanup();
-        return;
-    }
-    std::cout << "Listening...\n";
-
-    if ((new_socket = accept(server_fd, (struct sockaddr*)&address, &addrlen)) == INVALID_SOCKET) {
-        std::cerr << "Accept failed\n";
-        closesocket(server_fd);
-        WSACleanup();
-        return;
-    }
-    std::cout << "Connection accepted\n";
-
-    // Main loop for handling commands
     while (true) {
-        recv(new_socket, buffer, static_cast<int>(sizeof(buffer)), 0);
-        std::string command(buffer);
-
-        if (command == "exit") {
-            std::cout << "Exiting...\n";
-            send(new_socket, "Server exiting...", 18, 0);
-            break;
+        int bytesReceived = recv(clientSocket, buffer, sizeof(buffer), 0);
+        if (bytesReceived <= 0) {
+            break; // Connection closed or error
         }
-        else if (command == "add") {
+
+        command = std::string(buffer, bytesReceived); // Capture the exact received data
+        memset(buffer, 0, sizeof(buffer)); // Clear the buffer after reading
+
+        if (command == "add") {
             const int arraySize = 5;
             const int a[arraySize] = { 1, 2, 3, 4, 5 };
             const int b[arraySize] = { 10, 20, 30, 40, 50 };
             int c[arraySize] = { 0 };
 
-            std::cout << "Performing CUDA add operation\n";
+            std::cout << "Performing CUDA add operation\n" << std::flush;
             cudaError_t cudaStatus = addWithCuda(c, a, b, arraySize);
             if (cudaStatus != cudaSuccess) {
-                fprintf(stderr, "addWithCuda failed!");
-                send(new_socket, "CUDA operation failed", 21, 0);
+                send(clientSocket, "CUDA operation failed", 21, 0);
             }
             else {
-                std::cout << "CUDA operation succeeded\n";
                 std::string result = "Result: {" + std::to_string(c[0]) + "," + std::to_string(c[1]) + ","
                     + std::to_string(c[2]) + "," + std::to_string(c[3]) + "," + std::to_string(c[4]) + "}";
-                send(new_socket, result.c_str(), static_cast<int>(result.size()), 0);
+                send(clientSocket, result.c_str(), result.size(), 0);
                 std::cout << "Result sent to client: " << result << std::endl;
             }
         }
         else if (command == "matmul") {
-            // Perform Matrix Multiplication
-            const int N = 3;  // 3x3 matrix
+            const int N = 3;
             int A[N][N] = {
                 {1, 2, 3},
                 {4, 5, 6},
@@ -118,14 +69,12 @@ void startServer()
             };
             int C[N][N] = { 0 };
 
-            std::cout << "Performing CUDA matrix multiplication\n";
+            std::cout << "Performing CUDA matrix multiplication\n" << std::flush;
             cudaError_t cudaStatus = matmulWithCuda((int*)C, (int*)A, (int*)B, N);
             if (cudaStatus != cudaSuccess) {
-                std::cerr << "matmulWithCuda failed!" << std::endl;
-                send(new_socket, "CUDA matrix multiplication failed", 33, 0);
+                send(clientSocket, "CUDA matrix multiplication failed", 33, 0);
             }
             else {
-                std::cout << "Matrix multiplication succeeded" << std::endl;
                 std::ostringstream result;
                 result << "Result: ";
                 for (int i = 0; i < N; ++i) {
@@ -133,82 +82,176 @@ void startServer()
                         result << C[i][j] << " ";
                     }
                 }
-                send(new_socket, result.str().c_str(), static_cast<int>(result.str().size()), 0);
+                send(clientSocket, result.str().c_str(), result.str().size(), 0);
                 std::cout << "Result sent to client: " << result.str() << std::endl;
             }
         }
+        else if (command == "exit") {
+            std::cout << "Client requested exit\n";
+            send(clientSocket, "Server exiting...", 18, 0);
+            break;
+        }
         else {
             std::string errorMsg = "Unknown command: " + command;
-            send(new_socket, errorMsg.c_str(), static_cast<int>(errorMsg.size()), 0);
+            send(clientSocket, errorMsg.c_str(), errorMsg.size(), 0);
             std::cout << errorMsg << std::endl;
         }
+
+        // Print active connections after command handling
+        std::cout << "Active connections after command: " << activeConnections.load() << std::endl;
     }
 
-    closesocket(new_socket);
-    closesocket(server_fd);
-    WSACleanup();
+    // Close the client socket and decrement active connections
+    closesocket(clientSocket); // Close the client socket
+    activeConnections--; // Decrement active connections count
+    std::cout << "Connection closed. Active connections: " << activeConnections.load() << std::endl;
 }
 
-void startClient() {
-    WSADATA wsaData;
-    SOCKET sock = INVALID_SOCKET;
-    struct sockaddr_in serv_addr;
-    char buffer[1024] = { 0 };
 
+
+
+// Main server function
+void startServer() {
+    WSADATA wsaData;
+    SOCKET serverSocket, clientSocket;
+    struct sockaddr_in serverAddr;
+    int addrlen = sizeof(serverAddr);
+    int opt = 1;
+
+    // Initialize Winsock
     if (WSAStartup(MAKEWORD(2, 2), &wsaData) != 0) {
         std::cerr << "WSAStartup failed\n";
         return;
     }
-    std::cout << "WSAStartup succeeded (client)\n";
 
-    if ((sock = socket(AF_INET, SOCK_STREAM, 0)) == INVALID_SOCKET) {
+    // Create a socket
+    serverSocket = socket(AF_INET, SOCK_STREAM, 0);
+    if (serverSocket == INVALID_SOCKET) {
+        std::cerr << "Socket creation failed\n";
+        WSACleanup();
+        return;
+    }
+
+    // Set socket options
+    if (setsockopt(serverSocket, SOL_SOCKET, SO_REUSEADDR, (char*)&opt, sizeof(opt)) < 0) {
+        std::cerr << "Setsockopt failed\n";
+        closesocket(serverSocket);
+        WSACleanup();
+        return;
+    }
+
+    // Set up the server address
+    serverAddr.sin_family = AF_INET;
+    serverAddr.sin_addr.s_addr = INADDR_ANY;
+    serverAddr.sin_port = htons(PORT);
+
+    // Bind the socket
+    if (bind(serverSocket, (struct sockaddr*)&serverAddr, sizeof(serverAddr)) < 0) {
+        std::cerr << "Bind failed\n";
+        closesocket(serverSocket);
+        WSACleanup();
+        return;
+    }
+
+    // Listen for incoming connections
+    if (listen(serverSocket, BACKLOG) < 0) {
+        std::cerr << "Listen failed\n";
+        closesocket(serverSocket);
+        WSACleanup();
+        return;
+    }
+
+    std::cout << "Server is listening for connections...\n";
+
+    // Accept connections and spawn new threads for each client
+    while (true) {
+        clientSocket = accept(serverSocket, (struct sockaddr*)&serverAddr, &addrlen);
+        if (clientSocket == INVALID_SOCKET) {
+            std::cerr << "Accept failed\n";
+            continue;
+        }
+
+        std::cout << "New client connected. Active connections: " << activeConnections.load() << std::endl;
+
+        // Spawn a new thread for each new client
+        std::thread clientThread(handleClient, clientSocket);
+        clientThread.detach(); // Detach the thread so it runs independently
+    }
+
+    closesocket(serverSocket);
+    WSACleanup();
+}
+
+// Client function
+void startClient() {
+    WSADATA wsaData;
+    SOCKET sock;
+    struct sockaddr_in serverAddr;
+    char buffer[1024] = { 0 };
+
+    // Initialize Winsock
+    if (WSAStartup(MAKEWORD(2, 2), &wsaData) != 0) {
+        std::cerr << "WSAStartup failed\n";
+        return;
+    }
+
+    // Create a socket
+    sock = socket(AF_INET, SOCK_STREAM, 0);
+    if (sock == INVALID_SOCKET) {
         std::cerr << "Socket creation failed (client)\n";
         WSACleanup();
         return;
     }
-    std::cout << "Socket created (client)\n";
 
-    serv_addr.sin_family = AF_INET;
-    serv_addr.sin_port = htons(PORT);
-
-    if (InetPton(AF_INET, "127.0.0.1", &serv_addr.sin_addr) <= 0) {
+    // Set up the server address
+    serverAddr.sin_family = AF_INET;
+    serverAddr.sin_port = htons(PORT);
+    if (InetPton(AF_INET, "127.0.0.1", &serverAddr.sin_addr) <= 0) {
         std::cerr << "Invalid address/Address not supported (client)\n";
         closesocket(sock);
         WSACleanup();
         return;
     }
-    std::cout << "Address converted (client)\n";
 
-    std::this_thread::sleep_for(std::chrono::seconds(1)); // Give server time to start
-
-    if (connect(sock, (struct sockaddr*)&serv_addr, sizeof(serv_addr)) < 0) {
+    // Connect to the server
+    if (connect(sock, (struct sockaddr*)&serverAddr, sizeof(serverAddr)) < 0) {
         std::cerr << "Connection failed (client)\n";
         closesocket(sock);
         WSACleanup();
         return;
     }
+
     std::cout << "Connected to server\n";
 
     std::string input;
     while (true) {
-        std::cout << "Enter command (add, exit, matmul): ";
+        std::cout << "Enter command (add, matmul, exit): ";
         std::getline(std::cin, input);
 
-        send(sock, input.c_str(), static_cast<int>(input.size()), 0);
+        // Send command to server
+        send(sock, input.c_str(), input.size(), 0);
         if (input == "exit") {
             break;
         }
 
-        recv(sock, buffer, static_cast<int>(sizeof(buffer)), 0);
-        std::cout << "Response from server: " << buffer << std::endl;
+        // Receive response from server
+        memset(buffer, 0, sizeof(buffer)); // Clear buffer before each receive
+        int bytesReceived = recv(sock, buffer, sizeof(buffer), 0);
+        if (bytesReceived > 0) {
+            std::cout << "Response from server: " << buffer << std::endl;
+        }
+        else {
+            std::cerr << "Failed to receive response from server\n";
+        }
     }
 
     closesocket(sock);
     WSACleanup();
 }
 
+
 int main() {
-	// Start TCP/IP server and client
+    // Start TCP/IP server and client
     std::thread serverThread(startServer);
     std::thread clientThread(startClient);
 
